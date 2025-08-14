@@ -1,5 +1,5 @@
 # COMM514-Research-Project
-VI-guided NSGA-II: a novel Evolutionary Multi-Objective Optimisation Algorithm for Feature Selection for Single-cell Classification
+*VI-guided NSGA-II: a novel Evolutionary Multi-Objective Optimisation Algorithm for Feature Selection for Single-cell Classification*
 
 This repository contains the necessary code and results files for the production of the COMM514 Masters' level research project. 
 
