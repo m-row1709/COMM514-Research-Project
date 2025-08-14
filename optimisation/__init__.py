@@ -14,6 +14,7 @@ These functions include:
 import os
 import numpy as np
 from joblib import Parallel, delayed
+import warnings
 
 # Pymoo packages
 from pymoo.algorithms.moo.nsga2 import NSGA2
@@ -21,6 +22,7 @@ from pymoo.optimize import minimize
 from pymoo.operators.crossover.ux import UniformCrossover
 from pymoo.core.sampling import Sampling
 from pymoo.core.mutation import Mutation
+from pymoo.operators.mutation.bitflip import BitflipMutation
 from pymoo.core.problem import ElementwiseProblem, StarmapParallelization
 import multiprocessing as mp
 
@@ -125,6 +127,67 @@ class FixedFeatureSampling(Sampling):
 
         return pop
     
+
+
+class StandardBitflipMutation(Mutation):
+    """
+    A standard bitflip mutation operator, adapted only to repair solutions to include required features.
+
+    Attributes:
+        - data (ndarray): A 2D NumPy array of shape (n_records, n_features) - contains counts data.
+        - features (ndarray): A 1D NumPy array of shape (n_features) - contains a list of feature names.
+        - required_features (ndarray): A 1D NumPy array - contains a list of all features required to be in every solution.
+        - prob (float): The probability with which each solution in the population will be mutated.
+        - prob_var (float): The probability with which each feature of a solution will be mutated.
+
+    Methods:
+        - _do(): defines the custom mutation operator implementation.
+    """
+
+    def __init__(self, data, features, required_features, prob = 1, prob_var = 0.01):
+        super().__init__()
+        self.data = data
+        self.features = features
+        self.required_features = required_features
+        self.prob = prob # Individual mutation probability
+        self.prob_var_add = prob_var / 2 # Variable mutation probability for feature addition
+        self.prob_var_drop = prob_var # Variable mutation probability for feature removal
+
+
+    def _do(self, problem, X, **kwargs):
+        # Get the column indices of our list of required features
+        required_indices = []
+        for i in range(len(self.required_features)):
+            required_indices.append(self.features.index(self.required_features[i]))
+        
+        # Make a true copy of the population
+        X_new = X.copy()
+
+        # Iterate through each solution
+        for i in range(X.shape[0]):
+            # Only mutate each solution with probability equal to prob
+            if np.random.rand() < self.prob:
+                # Iterate through each feature
+                for var in range(X.shape[1]):
+                    # Ensure that required features are always included
+                    if var in required_indices:
+                        X_new[i, var] = 1
+
+                    # Mutate to remove feature with probability equal to prob_var_drop
+                    elif X[i, var] == 1 and np.random.rand() < self.prob_var_drop:
+                        # Perform mutation
+                        X_new[i, var] = 1 - X[i, var]
+                    
+                    # Mutate to add feature with probability equal to prob_var_add
+                    elif X[i, var] == 0 and np.random.rand() < self.prob_var_add:
+                        # Perform mutation
+                        X_new[i, var] = 1 - X[i, var]
+
+            else:
+                continue
+
+        return X_new
+
 
 
 class VIGGuidedMutation(Mutation):
@@ -351,7 +414,7 @@ class ClassifyOptimise(ElementwiseProblem):
 # External Validation
 # ---------------------
 
-def perform_external_validation(counts_data, labels_data, label_weights, final_results):
+def perform_external_validation(counts_data, labels_data, label_weights, results):
     """
     Externally validates the performance of a given solution, according to the associated data and label weights.
 
@@ -359,7 +422,7 @@ def perform_external_validation(counts_data, labels_data, label_weights, final_r
         - counts_data (ndarray): A 2D NumPy array of shape (n_records, n_features) - contains counts data.
         - labels_data (ndarray): A 1D NumPy array of shape (n_records) - contains ground truth labels data.
         - label_weights (dict): Contains the relative weights for each of the labels "1", "2" and "3".
-        - final_results: Pymoo algorithm output object.
+        - results (dict): Contains "F" pareto front, "X" solutions, and "complete results".
 
     Returns:
         - external_validation_accuracies (list): A list of externally validated accuracies for each solution in the Pareto front.
@@ -368,10 +431,10 @@ def perform_external_validation(counts_data, labels_data, label_weights, final_r
     external_validation_accuracies = []
 
     # Validate each solution in the final pareto front
-    for i in range(len(final_results.X)):
+    for i in range(len(results["X"])):
 
         # Extract solution from ith result, and filter counts data for those features
-        best_solution = final_results.X[i]
+        best_solution = results["X"][i]
         X = counts_data[:, best_solution]
         
         # Perform 5-fold data stratification
@@ -415,7 +478,7 @@ def perform_external_validation(counts_data, labels_data, label_weights, final_r
 # Optimisation Performance Functions
 # ------------------------------------
 
-def run_optimisation(counts_data, labels_data, feature_list, label_weights,
+def run_optimisation(counts_data, labels_data, feature_list, label_weights, mutation_operator,
                      pop_size, n_generations, initial_pop_num_features, required_features, 
                      subfunctions, ind_mutation_prob, var_mutation_prob, n_processes, 
                      log_file, random_seed):
@@ -427,6 +490,7 @@ def run_optimisation(counts_data, labels_data, feature_list, label_weights,
         - labels_data (ndarray): A 1D NumPy array of shape (n_records) - contains ground truth labels data.
         - feature_list (ndarray): A 1D NumPy array of shape (n_features) - contains a list of feature names. 
         - label_weights (dict): Contains the relative weights for each of the labels "1", "2" and "3".
+        - mutation_operator (str): Defines which mutation operator the algorithm will utilise.
         - pop_size (int): The population size of each generation of NSGA2.
         - n_generations (int): The number of generations NSGA2 should iterate for.
         - initial_pop_num_features (int): The maximum number of features a solution in the initial population may have.
@@ -459,6 +523,16 @@ def run_optimisation(counts_data, labels_data, feature_list, label_weights,
                                         features = feature_list, label_weights = label_weights, 
                                         shared_results = shared_results, log_file = log_file, 
                                         elementwise_runner = runner)
+    
+    # Define the mutation operator
+    if mutation_operator == "VIG Guided Mutation":
+        operator = VIGGuidedMutation(data = counts_data, features = feature_list, 
+                                     subfunctions = subfunctions, required_features = required_features, 
+                                     prob = ind_mutation_prob, prob_var = var_mutation_prob)
+    elif mutation_operator == "Bitflip Mutation":
+        operator = StandardBitflipMutation(data = counts_data, features = feature_list, 
+                                           required_features = required_features,
+                                           prob = ind_mutation_prob, prob_var = var_mutation_prob)
 
     # Initialise instance of NSGA2
     algorithm = NSGA2(pop_size = pop_size,
@@ -467,8 +541,7 @@ def run_optimisation(counts_data, labels_data, feature_list, label_weights,
                                                       num_features = initial_pop_num_features,
                                                       required_features = required_features),
                       crossover = UniformCrossover(),
-                      mutation = VIGGuidedMutation(data = counts_data, features = feature_list, subfunctions = subfunctions, 
-                                                   required_features = required_features, prob = ind_mutation_prob, prob_var = var_mutation_prob))
+                      mutation = operator)
 
     # Perform minimisation
     results = minimize(problem = problem_instance,
@@ -480,11 +553,17 @@ def run_optimisation(counts_data, labels_data, feature_list, label_weights,
     pool.close()
     pool.join()
 
-    return results, results.problem.complete_results
+    saveable_results = {
+        "X": results.X,
+        "F": results.F,
+        "complete results": list(results.problem.complete_results)
+    }
+
+    return saveable_results
 
 
 
-def classify_optimise_repeat(counts_data, labels_data, feature_list, label_weights,
+def classify_optimise_repeat(counts_data, labels_data, feature_list, label_weights, mutation_operator,
                              pop_size, n_generations, initial_pop_num_features, required_features,
                              subfunctions, ind_mutation_prob, var_mutation_prob, n_processes, 
                              n_repeats, log_file, random_seed = 42):
@@ -496,6 +575,7 @@ def classify_optimise_repeat(counts_data, labels_data, feature_list, label_weigh
         - labels_data (ndarray): A 1D NumPy array of shape (n_records) - contains ground truth labels data.
         - feature_list (ndarray): A 1D NumPy array of shape (n_features) - contains a list of feature names. 
         - label_weights (dict): Contains the relative weights for each of the labels "1", "2" and "3".
+        - mutation_operator (str): Defines which mutation operator the algorithm will utilise.
         - pop_size (int): The population size of each generation of NSGA2.
         - n_generations (int): The number of generations NSGA2 should iterate for.
         - initial_pop_num_features (int): The maximum number of features a solution in the initial population may have.
@@ -535,21 +615,21 @@ def classify_optimise_repeat(counts_data, labels_data, feature_list, label_weigh
         # Generate random seed for repeat optimisation run
         repeat_random_seed = np.random.randint(1, 100001)
 
-        final_results, complete_results = run_optimisation(counts_data = counts_data,
-                                                           labels_data = labels_data, 
-                                                           feature_list = feature_list, 
-                                                           label_weights = label_weights,
-                                                           pop_size = pop_size,
-                                                           n_generations = n_generations,
-                                                           initial_pop_num_features = initial_pop_num_features,
-                                                           required_features = required_features,
-                                                           subfunctions = subfunctions, 
-                                                           ind_mutation_prob = ind_mutation_prob,
-                                                           var_mutation_prob = var_mutation_prob,
-                                                           n_processes = n_processes,
-                                                           log_file = log_file,
-                                                           repeat = r+1,
-                                                           random_seed = repeat_random_seed)
+        results = run_optimisation(counts_data = counts_data,
+                                   labels_data = labels_data, 
+                                   feature_list = feature_list, 
+                                   label_weights = label_weights,
+                                   mutation_operator = mutation_operator,
+                                   pop_size = pop_size,
+                                   n_generations = n_generations,
+                                   initial_pop_num_features = initial_pop_num_features,
+                                   required_features = required_features,
+                                   subfunctions = subfunctions, 
+                                   ind_mutation_prob = ind_mutation_prob,
+                                   var_mutation_prob = var_mutation_prob,
+                                   n_processes = n_processes,
+                                   log_file = log_file,
+                                   random_seed = repeat_random_seed)
         
         print(f"Completed optimisation of Repeat {r+1} out of {n_repeats}.")
 
@@ -558,12 +638,11 @@ def classify_optimise_repeat(counts_data, labels_data, feature_list, label_weigh
         external_validation_results = perform_external_validation(counts_data = counts_data,
                                                                   labels_data = labels_data,
                                                                   label_weights = label_weights, 
-                                                                  final_results = final_results)
+                                                                  results = results)
         
         # Update dictionary to store results of this repeat
         single_repeat_results.update({
-            "final results": final_results,
-            "complete results": list(complete_results),
+            "results": results,
             "external validation results": external_validation_results
         })
 
@@ -593,8 +672,11 @@ def lasso_mo(X, y, label_weights, initial_C = 1.0, decay = 0.99, random_seed = 4
         - random_seed (int): The pre-defined random seed that Lasso-MO should operate upon.
 
     Returns:
-        - solutions (list): Contains a list of tuples (C, weighted accuracy, number of features, selected features).
+        - solutions (list): Contains a list of dictionaries (solution, weighted accuracy, number of features, C).
     """
+    # Suppress futurewarnings from LogisticRegression()
+    warnings.filterwarnings("ignore", category = FutureWarning)
+
     np.random.seed(random_seed)
 
     C = initial_C
@@ -619,29 +701,73 @@ def lasso_mo(X, y, label_weights, initial_C = 1.0, decay = 0.99, random_seed = 4
         # Evaluate performance
         weighted_accuracy = weighted_accuracy_score(y_test, y_pred, label_weights)
 
-        # Get the indices of the features selected by the model
-        selected_features = np.where(np.any(model.coef_ != 0, axis = 0))[0]
+        # Get the features selected by the model
+        selected_features = np.zeros(X.shape[1], dtype = bool)
+        selected_features[np.where(np.any(model.coef_ != 0, axis = 0))[0]] = True
+        num_selected_features = len([x for x in selected_features if x == True])
 
-        if len(selected_features) == 1:
+        if num_selected_features == 1:
             break
 
         # Store results
         solution_results = {
-            "C": C,
-            "weighted accuracy": weighted_accuracy, 
-            "number of features": len(selected_features),
-            "selected features": selected_features
+            "solution": selected_features,
+            "number of features": num_selected_features,
+            "weighted accuracy": weighted_accuracy,
+            "C": C
         }
         
         solutions.append(solution_results)
 
+        print(f"C = {C}, number of features: {num_selected_features}, weighted accuracy: {weighted_accuracy}.")
+
         # Decay current value of C by decay parameter
         C *= decay
 
-        print(solution_results)
-        print(f"C = {C}")
-
     return solutions
+
+
+
+def extract_lasso_pareto_solutions(solutions, num_features):
+    """
+    Args:
+        - solutions (list): Contains a list of dictionaries (solution, weighted accuracy, number of features, C).
+        - num_features (int): The total number of gene features.
+        
+    Returns:
+        - pareto_solutions_lasso: Contains a list of dictionaries (solution, weighted accuracy, number of features, C).
+    """
+    # Empty array for storing best solution for each number of features
+    best_solutions = np.zeros(num_features).tolist()
+
+    for solution in solutions:
+        num_selected_features = solution["number of features"]
+
+        # If no solution for that number of features, immediately accept solution 
+        if best_solutions[num_selected_features - 1] == 0:
+            best_solutions[num_selected_features - 1] = solution
+        # Else, if weighted accuracy is better in current solution, accept that solution
+        elif solution["weighted accuracy"] > best_solutions[num_selected_features - 1]["weighted accuracy"]:
+            best_solutions[num_selected_features - 1] = solution
+    
+    # Remove all zeros (aka instances where there was no solution with that number of features)
+    filtered_best_solutions = [sol for sol in best_solutions if sol != 0]
+
+    pareto_solutions_lasso = []
+
+    # Cut down to only the pareto optimal solutions
+    for i in range(len(filtered_best_solutions)):
+        if i == 0:
+            pareto_solutions_lasso.append(filtered_best_solutions[i])
+        else:
+            # Only add solution to pareto front if the accuracy is greater than any solution already added
+            # Since it is iterating in order from least to most features, this is minimised simultaneously
+            accuracy = filtered_best_solutions[i]["weighted accuracy"]
+
+            if accuracy > pareto_solutions_lasso[-1]["weighted accuracy"]:
+                pareto_solutions_lasso.append(filtered_best_solutions[i])
+
+    return pareto_solutions_lasso
 
 
 
@@ -668,6 +794,9 @@ def lasso_mo_repeat(X, y, label_weights, n_repeats, initial_C = 1.0, decay = 0.9
     all_repeat_results = {}
 
     for r in range(n_repeats):
+        # Initialise dictionary for results of generation r
+        single_repeat_results = {}
+
         print(f"Starting Repeat {r+1} out of {n_repeats}...")
         
         # Perform repeat optimisation run
@@ -677,12 +806,48 @@ def lasso_mo_repeat(X, y, label_weights, n_repeats, initial_C = 1.0, decay = 0.9
                              initial_C = initial_C,
                              decay = decay,
                              random_seed = repeat_seeds[r])
+
+        # Extract pareto optimal solutions from this Lasso run
+        pareto_solutions = extract_lasso_pareto_solutions(solutions = solutions,
+                                                          num_features = len(y))
+        
+        # Convert results format to the same output as ClassifyOptimise()
+        pareto_solutions_X = [None] * len(pareto_solutions)
+        pareto_solutions_F = [None] * len(pareto_solutions)
+        
+        for i in range(len(pareto_solutions)):
+            pareto_solutions_X[i] = pareto_solutions[i]["solution"]
+            pareto_solutions_F[i] = [pareto_solutions[i]["number of features"],
+                                     pareto_solutions[i]["weighted accuracy"]]
+            
+        pareto_solutions_X = np.array(pareto_solutions_X)
+        pareto_solutions_F = np.array(pareto_solutions_F)
+        
+        # Complete results dictionary for this run of Lasso
+        results = {
+            "X": pareto_solutions_X,
+            "F": pareto_solutions_F,
+            "complete results": solutions
+        }
         
         print(f"Completed optimisation of Repeat {r+1} out of {n_repeats}.")
+
+        print(f"Performing External Validation...")
+
+        external_validation_results = perform_external_validation(counts_data = X.values,
+                                                                  labels_data = y.values,
+                                                                  label_weights = label_weights, 
+                                                                  results = results)
+        
+        # Update dictionary to store results of this repeat
+        single_repeat_results.update({
+            "results": results,
+            "external validation results": external_validation_results
+        })
         
         # Update complete results dictionary to store results of this repeat
         all_repeat_results.update({
-            f"{r+1}": solutions
+            f"{r+1}": single_repeat_results
         })
 
     return all_repeat_results
