@@ -1,0 +1,21 @@
+Beginning optimisation...
+Evaluating on PID 512644, Number of features: 3, Mean weighted accuracy: 0.3072
+Evaluating on PID 508104, Number of features: 5, Mean weighted accuracy: 0.3036
+Evaluating on PID 505364, Number of features: 7, Mean weighted accuracy: 0.3608
+Evaluating on PID 507192, Number of features: 6, Mean weighted accuracy: 0.2885
+Evaluating on PID 513736, Number of features: 7, Mean weighted accuracy: 0.2976
+Evaluating on PID 503360, Number of features: 4, Mean weighted accuracy: 0.3358
+Evaluating on PID 512096, Number of features: 6, Mean weighted accuracy: 0.4106
+Evaluating on PID 509328, Number of features: 8, Mean weighted accuracy: 0.4035
+Evaluating on PID 505384, Number of features: 8, Mean weighted accuracy: 0.3325
+Evaluating on PID 509096, Number of features: 9, Mean weighted accuracy: 0.3842
+Evaluating on PID 508104, Number of features: 7, Mean weighted accuracy: 0.3768
+Evaluating on PID 512644, Number of features: 6, Mean weighted accuracy: 0.3679
+Evaluating on PID 504484, Number of features: 5, Mean weighted accuracy: 0.2975
+Evaluating on PID 512948, Number of features: 5, Mean weighted accuracy: 0.3852
+Evaluating on PID 510328, Number of features: 5, Mean weighted accuracy: 0.3784
+Evaluating on PID 505716, Number of features: 7, Mean weighted accuracy: 0.3220
+Evaluating on PID 460872, Number of features: 9, Mean weighted accuracy: 0.3691
+Evaluating on PID 497336, Number of features: 7, Mean weighted accuracy: 0.3717
+Evaluating on PID 508868, Number of features: 10, Mean weighted accuracy: 0.3066
+Evaluating on PID 511396, Number of features: 9, Mean weighted accuracy: 0.3345
